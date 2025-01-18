@@ -62,6 +62,22 @@ input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_EMA;    // Slow MA Method
 input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE; // Slow MA Applied Price
 input int                InpSlowMAShift        = 0;           // Slow MA shift
 
+// Trend MA (10)
+input int                InpTrendMA1Bars         = 10;          // Trend MA1 Bars
+input ENUM_MA_METHOD     InpTrendMA1Method       = MODE_EMA;    // Trend MA1 Method
+input ENUM_APPLIED_PRICE InpTrendMA1AppliedPrice = PRICE_CLOSE; // Trend MA1 Applied Price
+
+// Trend MA (300)
+input int                InpTrendMA2Bars         = 300;         // Trend MA2 Bars
+input ENUM_MA_METHOD     InpTrendMA2Method       = MODE_EMA;    // Trend MA2 Method
+input ENUM_APPLIED_PRICE InpTrendMA2AppliedPrice = PRICE_CLOSE; // Trend MA2 Applied Price
+
+int           TrendMA1Handle;
+double        TrendMA1Buffer[];
+int           TrendMA2Handle;
+double        TrendMA2Buffer[];
+
+
 //
 //	The basic expert uses fixed take profit, stop loss and order size
 //
@@ -191,6 +207,18 @@ int OnInit() {
    TrailingStop = PipsToDouble( InpTrailingStopPips );
 
    Trade.SetExpertMagicNumber( InpMagic );
+   
+   TrendMA1Handle = iMA(Symbol(), Period(), InpTrendMA1Bars, 0, InpTrendMA1Method, InpTrendMA1AppliedPrice);
+ArraySetAsSeries(TrendMA1Buffer, true);
+
+TrendMA2Handle = iMA(Symbol(), Period(), InpTrendMA2Bars, 0, InpTrendMA2Method, InpTrendMA2AppliedPrice);
+ArraySetAsSeries(TrendMA2Buffer, true);
+
+if (TrendMA1Handle == INVALID_HANDLE || TrendMA2Handle == INVALID_HANDLE) {
+    Print("Error creating handles for trend MAs");
+    return INIT_FAILED;
+}
+
 
    FastHandle = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
    ArraySetAsSeries( FastBuffer, true );
@@ -212,6 +240,10 @@ int OnInit() {
 }
 
 void OnDeinit( const int reason ) {
+IndicatorRelease(TrendMA1Handle);
+IndicatorRelease(TrendMA2Handle);
+
+
    IndicatorRelease( FastHandle );
    IndicatorRelease( SlowHandle );
 }
@@ -240,6 +272,19 @@ void OnTick() {
    if ( !IsNewBar( true ) ) return;
    
    if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+   
+   if (CopyBuffer(TrendMA1Handle, 0, 0, 3, TrendMA1Buffer) < 3) {
+    Print("Insufficient results from Trend MA1");
+    return;
+   }
+   if (CopyBuffer(TrendMA2Handle, 0, 0, 3, TrendMA2Buffer) < 3) {
+    Print("Insufficient results from Trend MA2");
+    return;
+   }
+
+   // Sprawdź trend na podstawie dwóch nowych średnich
+   bool isTrendUp = TrendMA1Buffer[1] > TrendMA2Buffer[1];
+   bool isTrendDown = TrendMA1Buffer[1] < TrendMA2Buffer[1];
 
    // Get the fast and slow ma values for bar 1 and bar 2
    if ( CopyBuffer( FastHandle, 0, 0, 3, FastBuffer ) < 3 ) {
@@ -251,16 +296,17 @@ void OnTick() {
       Print( "Insufficient results from slow MA" );
       return;
    }
-
-   // Compare, if Fast 1 is above Slow 1 and Fast 2 is not above Slow 2 then
-   // there is a cross up
-   if ( ( FastBuffer[1] > SlowBuffer[1] ) && !( FastBuffer[2] > SlowBuffer[2] ) ) {
-      OpenTrade( ORDER_TYPE_BUY );
-   }
    
-   if ( ( FastBuffer[1] < SlowBuffer[1] ) && !( FastBuffer[2] < SlowBuffer[2] ) ) {
-      OpenTrade( ORDER_TYPE_SELL );
-   }
+   
+
+   // Otwórz pozycję tylko jeśli trend jest zgodny
+if (isTrendUp && (FastBuffer[1] > SlowBuffer[1]) && !(FastBuffer[2] > SlowBuffer[2])) {
+    OpenTrade(ORDER_TYPE_BUY);
+}
+
+if (isTrendDown && (FastBuffer[1] < SlowBuffer[1]) && !(FastBuffer[2] < SlowBuffer[2])) {
+    OpenTrade(ORDER_TYPE_SELL);
+}
 
 
    //
