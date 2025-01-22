@@ -1,0 +1,422 @@
+
+
+#property copyright "Copyright 2022, Orchard Forex"
+#property link "https://www.orchardforex.com"
+#property version "1.00"
+
+
+
+//
+//	Inputs
+//
+//
+//	Fast MA
+//
+input string ON_OFF_CZAS = "============================================================";
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = false; // Domyślnie włączone
+input string USTAWIENIE_CZASU_1 = "============================================================";
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 2;
+input int startMinute1 = 0;
+input int endHour1 = 14;
+input int endMinute1 = 0;
+input string USTAWIENIE_CZASU_2 = "============================================================";
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
+
+input string USTAWIENIE_WEJSCIA = "============================================================";
+
+// Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
+
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
+}
+input int                InpFastMABars         = 2;          // Fast MA Bars
+input ENUM_MA_METHOD     InpFastMAMethod       = MODE_SMA;    // Fast MA Method
+input ENUM_APPLIED_PRICE InpFastMAAppliedPrice = PRICE_CLOSE; // Fast MA Applied Price
+
+//
+//	Slow MA
+//
+input int                InpSlowMABars         = 11;          // Slow MA Bars
+input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_SMA;    // Slow MA Method
+input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE; // Slow MA Applied Price
+input int                InpSlowMAShift        = 0;           // Slow MA shift
+input string USTAWIENIE_TRENDU = "============================================================";
+// Trend MA (10)
+input int                InpTrendMA1Bars         = 10;          // Trend MA1 Bars
+input ENUM_MA_METHOD     InpTrendMA1Method       = MODE_SMA;    // Trend MA1 Method
+input ENUM_APPLIED_PRICE InpTrendMA1AppliedPrice = PRICE_CLOSE; // Trend MA1 Applied Price
+
+// Trend MA (300)
+input int                InpTrendMA2Bars         = 100;         // Trend MA2 Bars
+input ENUM_MA_METHOD     InpTrendMA2Method       = MODE_SMA;    // Trend MA2 Method
+input ENUM_APPLIED_PRICE InpTrendMA2AppliedPrice = PRICE_CLOSE; // Trend MA2 Applied Price
+
+input string RESZTA_USTAWIEN = "============================================================";
+
+int           TrendMA1Handle;
+double        TrendMA1Buffer[];
+int           TrendMA2Handle;
+double        TrendMA2Buffer[];
+
+
+//
+//	The basic expert uses fixed take profit, stop loss and order size
+//
+input double             InpOrderSize          = 0.01;  // Order size in lots
+input double             InpTakeProfitPips     = 20.0; // Take profit in pips
+input double             InpStopLossPips       = 20.0; // Stop loss in pips
+input double             InpTrailingStopPips   = 10.0;  // Trailing stop pips
+input int MaxTradesPerTrend = 2; // Maksymalna liczba pozycji na trend
+
+//
+//	Trades also have a magic number and a comment
+//
+input int InpMagic              = 222222;                     // Magic number
+input string             InpTradeComment       = "Example MA Cross with TS"; // Trade comment
+
+// Some global values
+double                   TakeProfit;
+double                   StopLoss;
+double                   TrailingStop;
+
+int tradeCount = 0;         // Liczba otwarć dla aktualnego trendu
+bool currentTrendUp = false; // Aktualny kierunek trendu
+bool currentTrendDown = false;
+
+void ResetTradeCountIfTrendChanged(bool isTrendUp, bool isTrendDown) {
+    // Jeśli trend zmienia kierunek, resetujemy licznik
+    if ((isTrendUp && !currentTrendUp) || (isTrendDown && !currentTrendDown)) {
+        tradeCount = 0; // Reset liczby otwarć
+        currentTrendUp = isTrendUp;
+        currentTrendDown = isTrendDown;
+        Print("Trend zmieniony. Licznik otwarć zresetowany.");
+    }
+}
+
+
+//
+//	Pips, points conversion
+//
+double                   PipSize() { return ( PipSize( Symbol() ) ); }
+double                   PipSize( string symbol ) {
+   double point  = SymbolInfoDouble( symbol, SYMBOL_POINT );
+   int    digits = ( int )SymbolInfoInteger( symbol, SYMBOL_DIGITS );
+   return ( ( ( digits % 2 ) == 1 ) ? point * 10 : point );
+}
+
+double PipsToDouble( double pips ) { return ( pips * PipSize( Symbol() ) ); }
+double PipsToDouble( double pips, string symbol ) { return ( pips * PipSize( symbol ) ); }
+
+bool   IsMarketOpen() { return IsMarketOpen( Symbol(), TimeCurrent() ); }
+bool   IsMarketOpen( datetime time ) { return IsMarketOpen( Symbol(), time ); }
+bool   IsMarketOpen( string symbol, datetime time ) {
+
+   static string   lastSymbol   = "";
+   static bool     isOpen       = false;
+   static datetime sessionStart = 0;
+   static datetime sessionEnd   = 0;
+
+   if ( lastSymbol == symbol && sessionEnd > sessionStart ) {
+      if ( ( isOpen && time >= sessionStart && time <= sessionEnd ) || ( !isOpen && time > sessionStart && time < sessionEnd ) ) return isOpen;
+   }
+
+   lastSymbol = symbol;
+
+   MqlDateTime mtime;
+   TimeToStruct( time, mtime );
+   datetime seconds  = mtime.hour * 3600 + mtime.min * 60 + mtime.sec;
+
+   mtime.hour        = 0;
+   mtime.min         = 0;
+   mtime.sec         = 0;
+   datetime dayStart = StructToTime( mtime );
+   datetime dayEnd   = dayStart + 86400;
+
+   datetime fromTime;
+   datetime toTime;
+
+   sessionStart = dayStart;
+   sessionEnd   = dayEnd;
+
+   for ( int session = 0;; session++ ) {
+
+      if ( !SymbolInfoSessionTrade( symbol, ( ENUM_DAY_OF_WEEK )mtime.day_of_week, session, fromTime, toTime ) ) {
+         sessionEnd = dayEnd;
+         isOpen     = false;
+         return isOpen;
+      }
+
+      if ( seconds < fromTime ) { // not inside a session
+         sessionEnd = dayStart + fromTime;
+         isOpen     = false;
+         return isOpen;
+      }
+
+      if ( seconds > toTime ) { // maybe a later session
+         sessionStart = dayStart + toTime;
+         continue;
+      }
+
+      // at this point must be inside a session
+      sessionStart = dayStart + fromTime;
+      sessionEnd   = dayStart + toTime;
+      isOpen       = true;
+      return isOpen;
+   }
+
+   return false;
+}
+
+bool IsNewBar( bool first_call = false ) {
+
+   static bool result = false;
+   if ( !first_call ) return ( result );
+
+   static datetime previous_time = 0;
+   datetime        current_time  = iTime( Symbol(), Period(), 0 );
+   result                        = false;
+   if ( previous_time != current_time ) {
+      previous_time = current_time;
+      result        = true;
+   }
+   return ( result );
+}
+
+// Bring in the trade class to make trading easier
+#include <Trade/Trade.mqh>
+CTrade        Trade;
+CPositionInfo Position;
+
+// Handles and buffers for the moving averages
+int           FastHandle;
+double        FastBuffer[];
+int           SlowHandle;
+double        SlowBuffer[];
+
+;
+//
+//	Initialisation
+//
+int OnInit() {
+
+   TakeProfit   = PipsToDouble( InpTakeProfitPips );
+   StopLoss     = PipsToDouble( InpStopLossPips );
+   TrailingStop = PipsToDouble( InpTrailingStopPips );
+
+   Trade.SetExpertMagicNumber( InpMagic );
+   
+   TrendMA1Handle = iMA(Symbol(), Period(), InpTrendMA1Bars, 0, InpTrendMA1Method, InpTrendMA1AppliedPrice);
+ArraySetAsSeries(TrendMA1Buffer, true);
+
+TrendMA2Handle = iMA(Symbol(), Period(), InpTrendMA2Bars, 0, InpTrendMA2Method, InpTrendMA2AppliedPrice);
+ArraySetAsSeries(TrendMA2Buffer, true);
+
+if (TrendMA1Handle == INVALID_HANDLE || TrendMA2Handle == INVALID_HANDLE) {
+    Print("Error creating handles for trend MAs");
+    return INIT_FAILED;
+}
+
+
+   FastHandle = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
+   ArraySetAsSeries( FastBuffer, true );
+
+   //	I could use the shift here but I won't
+   SlowHandle = iMA( Symbol(), Period(), InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
+   ArraySetAsSeries( SlowBuffer, true );
+
+   if ( FastHandle == INVALID_HANDLE || SlowHandle == INVALID_HANDLE ) {
+      Print( "Error creating handles to moving averages" );
+      return INIT_FAILED;
+   }
+
+   // In case of starting the expert mid bar block the new bar result
+   //	https://youtu.be/XHJPpvI2h50
+   IsNewBar( true );
+
+   return ( INIT_SUCCEEDED );
+}
+
+void OnDeinit( const int reason ) {
+IndicatorRelease(TrendMA1Handle);
+IndicatorRelease(TrendMA2Handle);
+
+
+   IndicatorRelease( FastHandle );
+   IndicatorRelease( SlowHandle );
+}
+
+void OnTick() {
+    // Szybka weryfikacja, czy handel jest możliwy
+    if (!IsTradeAllowed() || !IsMarketOpen() || !IsNewBar(true)) return;
+
+    // Trailing stop loss - działa na każdym ticku
+    if (TrailingStop > 0) ApplyTrailingStop();
+    if (!IsTimeToTrade()) {
+        Print("Handel nie jest dozwolony w tym przedziale czasowym.");
+        return; // Wyjdź, jeśli nie jest to odpowiedni czas na handel
+    }
+
+    // Sprawdź wskaźniki trendu
+    if (CopyBuffer(TrendMA1Handle, 0, 0, 3, TrendMA1Buffer) < 3) {
+        Print("Insufficient results from Trend MA1");
+        return;
+    }
+    if (CopyBuffer(TrendMA2Handle, 0, 0, 3, TrendMA2Buffer) < 3) {
+        Print("Insufficient results from Trend MA2");
+        return;
+    }
+
+    // Określ kierunek trendu
+    bool isTrendUp = TrendMA1Buffer[1] > TrendMA2Buffer[1];
+    bool isTrendDown = TrendMA1Buffer[1] < TrendMA2Buffer[1];
+
+    // Reset liczby transakcji, jeśli trend się zmienia
+    ResetTradeCountIfTrendChanged(isTrendUp, isTrendDown);
+
+    // Sprawdź średnie kroczące
+    if (CopyBuffer(FastHandle, 0, 0, 3, FastBuffer) < 3 || CopyBuffer(SlowHandle, 0, InpSlowMAShift, 3, SlowBuffer) < 3) {
+        Print("Insufficient results from moving averages");
+        return;
+    }
+
+    // Zamknięcie pozycji przy przecięciu w przeciwnym kierunku
+    if (PositionSelect(Symbol()) && Position.Magic() == InpMagic) {
+        ENUM_POSITION_TYPE positionType = (ENUM_POSITION_TYPE)Position.PositionType();
+
+        if (positionType == POSITION_TYPE_BUY && FastBuffer[1] < SlowBuffer[1] && FastBuffer[2] > SlowBuffer[2]) {
+            Trade.PositionClose(Symbol());
+            Print("Pozycja BUY zamknięta z powodu odwrotnego przecięcia.");
+        } else if (positionType == POSITION_TYPE_SELL && FastBuffer[1] > SlowBuffer[1] && FastBuffer[2] < SlowBuffer[2]) {
+            Trade.PositionClose(Symbol());
+            Print("Pozycja SELL zamknięta z powodu odwrotnego przecięcia.");
+        }
+    }
+
+    // Otwarcie pozycji na podstawie trendu i przecięcia średnich
+    if (isTrendUp && (FastBuffer[1] > SlowBuffer[1]) && !(FastBuffer[2] > SlowBuffer[2])) {
+        OpenTrade(ORDER_TYPE_BUY);
+    }
+    if (isTrendDown && (FastBuffer[1] < SlowBuffer[1]) && !(FastBuffer[2] < SlowBuffer[2])) {
+        OpenTrade(ORDER_TYPE_SELL);
+    }
+}
+
+
+
+
+//
+// Dodaj parametr wejściowy
+//
+
+
+
+void OpenTrade(ENUM_ORDER_TYPE type) {
+
+ // Sprawdź, czy upłynął wystarczający czas od ostatniej transakcji
+    if (PositionSelect(Symbol()) && Position.Magic() == InpMagic) {
+        Print("Istnieje już otwarta pozycja. Nowa pozycja nie zostanie otwarta, dopóki obecna nie zostanie zamknięta.");
+        return; // Wyjdź, jeśli istnieje otwarta pozycja
+    }
+
+
+    if (tradeCount >= MaxTradesPerTrend) {
+        Print("Limit ", MaxTradesPerTrend, " pozycji na obecny trend osiągnięty.");
+        return;
+    }
+
+    double price, sl, tp;
+
+    // Ustal cenę, SL i TP w zależności od rodzaju zlecenia
+    if (type == ORDER_TYPE_BUY) {
+        price = SymbolInfoDouble(Symbol(), SYMBOL_ASK); // Cena kupna
+        sl = price - StopLoss; // Stop Loss poniżej ceny kupna
+        tp = price + TakeProfit; // Take Profit powyżej ceny kupna
+    } else {
+        price = SymbolInfoDouble(Symbol(), SYMBOL_BID); // Cena sprzedaży
+        sl = price + StopLoss; // Stop Loss powyżej ceny sprzedaży
+        tp = price - TakeProfit; // Take Profit poniżej ceny sprzedaży
+    }
+
+    // Zaokrąglenie wartości do liczby miejsc po przecinku dla danego symbolu
+    price = NormalizeDouble(price, Digits());
+    sl = NormalizeDouble(sl, Digits());
+    tp = NormalizeDouble(tp, Digits());
+
+    // Pozwól na ustawienie TP i SL na 0 (opcjonalne)
+    if (StopLoss == 0) sl = 0;
+    if (TakeProfit == 0) tp = 0;
+
+    // Próba otwarcia pozycji
+    if (Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
+        tradeCount++; // Zwiększenie licznika otwarć
+        Print("Pozycja otwarta: ", EnumToString(type), ". Licznik pozycji: ", tradeCount);
+    } else {
+        Print("Otwarcie pozycji nie powiodło się. Symbol: ", Symbol(), ", Typ: ", EnumToString(type), ", Cena: ", price, ", SL: ", sl, ", TP: ", tp);
+    }
+}
+
+
+
+
+bool IsTradeAllowed() {
+
+   return ( ( bool )MQLInfoInteger( MQL_TRADE_ALLOWED )              // Trading allowed in input dialog
+            && ( bool )TerminalInfoInteger( TERMINAL_TRADE_ALLOWED ) // Trading allowed in terminal
+            && ( bool )AccountInfoInteger( ACCOUNT_TRADE_ALLOWED )   // Is account able to trade, not locked out
+            && ( bool )AccountInfoInteger( ACCOUNT_TRADE_EXPERT )    // Is account able to auto trade
+   );
+}
+
+//-	9.	The trailing stop function
+void ApplyTrailingStop() {
+
+   double ask                   = SymbolInfoDouble( Symbol(), SYMBOL_ASK );
+   double bid                   = SymbolInfoDouble( Symbol(), SYMBOL_BID );
+   double buyTrailingStopPrice  = ask - TrailingStop;
+   double sellTrailingStopPrice = bid + TrailingStop;
+   int    err;
+
+   //	https://youtu.be/u9qFvriLQnU
+   // For hedging accounts, not netting
+   for ( int i = PositionsTotal() - 1; i >= 0; i-- ) {
+      ulong ticket = PositionGetTicket( i );
+      if ( !PositionSelectByTicket( ticket ) ) continue;
+      if ( Position.Symbol() != Symbol() || Position.Magic() != InpMagic ) continue;
+
+      if ( Position.PositionType() == POSITION_TYPE_BUY && buyTrailingStopPrice > Position.PriceOpen() &&
+           ( Position.StopLoss() == 0 || buyTrailingStopPrice > Position.StopLoss() ) ) {
+         ResetLastError();
+         if ( !Trade.PositionModify( ticket, buyTrailingStopPrice, Position.TakeProfit() ) ) {
+            err = GetLastError();
+            PrintFormat( "Failed to update ts on ticket %I64u to %f, err=%i", ticket, buyTrailingStopPrice, err );
+         }
+      }
+
+      if ( Position.PositionType() == POSITION_TYPE_SELL && sellTrailingStopPrice < Position.PriceOpen() &&
+           ( Position.StopLoss() == 0 || sellTrailingStopPrice < Position.StopLoss() ) ) {
+         ResetLastError();
+         if ( !Trade.PositionModify( ticket, sellTrailingStopPrice, Position.TakeProfit() ) ) {
+            err = GetLastError();
+            PrintFormat( "Failed to update ts on ticket %I64u to %f, err=%i", ticket, sellTrailingStopPrice, err );
+            }
+        }
+   }
+}
