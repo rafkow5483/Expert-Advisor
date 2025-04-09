@@ -362,22 +362,25 @@ void ApplyTrailingStop() {
         if (!PositionSelectByTicket(ticket)) continue;
         if (Position.Symbol() != Symbol() || Position.Magic() != InpMagic) continue;
 
-        double openPrice = Position.PriceOpen();
-        double currentPrice = (Position.PositionType() == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
-                                                                             : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+        double entry = NormalizeDouble(Position.PriceOpen(), Digits());
+        double currentPrice = (Position.PositionType() == POSITION_TYPE_BUY)
+                            ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                            : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
 
-        double profit = MathAbs(currentPrice - openPrice);
-        
+        double profit = MathAbs(currentPrice - entry);
+
+        // Wartość zysku potrzebna do aktywacji breakeven w punktach
         if (profit >= TrailingStop) {
-            // Tylko ustaw SL na breakeven, jeśli jeszcze nie był ustawiony
-            if (Position.StopLoss() == 0) {
-                double sl = NormalizeDouble(openPrice, Digits());
-                if (!Trade.PositionModify(ticket, sl, Position.TakeProfit())) {
-                    PrintFormat("Nie udało się ustawić SL na breakeven (ticket %I64u), błąd: %i", ticket, GetLastError());
+            double sl = NormalizeDouble(Position.StopLoss(), Digits());
+
+            // Przesuń SL tylko jeśli jeszcze nie jest ustawiony na breakeven
+            if (sl != entry) {
+                if (!Trade.PositionModify(ticket, entry, Position.TakeProfit())) {
+                    PrintFormat("❌ Nie udało się ustawić SL na breakeven (ticket %I64u), błąd: %i", ticket, GetLastError());
                 } else {
-                    PrintFormat("SL ustawiony na breakeven (ticket %I64u)", ticket);
+                    PrintFormat("✅ SL przesunięty na breakeven (ticket %I64u)", ticket);
                 }
             }
         }
     }
-}
+}   
