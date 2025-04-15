@@ -82,10 +82,10 @@ double        TrendMA2Buffer[];
 //	The basic expert uses fixed take profit, stop loss and order size
 //
 input double             InpOrderSize          = 0.01;  // Order size in lots
-input double             InpTakeProfitPips     = 50.0; // Take profit in pips
-input double             InpStopLossPips       = 20.0; // Stop loss in pips
-input double             InpTrailingStopPips   = 10.0;  // Trailing stop pips
-input double BreakevenOffsetPips = 1.0; // Breakeven na +X pipsów
+input double             InpTakeProfitPips     = 500.0; // Take profit in pips
+input double             InpStopLossPips       = 200.0; // Stop loss in pips
+input double             InpTrailingStopPips   = 100.0;  // Trailing stop pips
+input double BreakevenOffsetPips = 5.0; // Breakeven na +X pipsów
 
 
 //
