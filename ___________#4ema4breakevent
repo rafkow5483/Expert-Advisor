@@ -400,6 +400,7 @@ void ApplyTrailingStop() {
     double profit = MathAbs(currentPrice - entry);
     double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
     double breakevenOffset = PipsToDouble(BreakevenOffsetPips);
+    double stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * point;
 
     double newSL = entry;
 
@@ -408,18 +409,21 @@ void ApplyTrailingStop() {
     else if (Position.PositionType() == POSITION_TYPE_SELL)
         newSL = entry - breakevenOffset;
 
-    // Ustaw SL tylko raz, jeśli osiągnięto próg zysku i jeszcze nie ustawiliśmy SL
+    // Sprawdź, czy odległość między SL a aktualną ceną spełnia wymagania brokera
+    if (Position.PositionType() == POSITION_TYPE_BUY && (currentPrice - newSL < stopLevel)) return;
+    if (Position.PositionType() == POSITION_TYPE_SELL && (newSL - currentPrice < stopLevel)) return;
+
+    // Ustaw SL tylko raz i tylko jeśli różni się wystarczająco
     if (profit >= TrailingStop && !breakevenSet) {
-        // Porównanie z tolerancją, by uniknąć ciągłych prób modyfikacji
         if (MathAbs(sl - newSL) > point * 2) {
             if (!Trade.PositionModify(PositionGetTicket(0), NormalizeDouble(newSL, Digits()), Position.TakeProfit())) {
                 PrintFormat("❌ SL nie ustawiony na breakeven+ | Error: %i", GetLastError());
             } else {
-                PrintFormat("✅ SL ustawiony na breakeven +1 pip (%f)", newSL);
-                breakevenSet = true; // oznacz, że już ustawiono
+                PrintFormat("✅ SL ustawiony na breakeven +%f pips", BreakevenOffsetPips);
+                breakevenSet = true;
             }
         } else {
-            breakevenSet = true; // mimo że już ustawiony – oznacz jako zakończone
+            breakevenSet = true;
         }
     }
 }
